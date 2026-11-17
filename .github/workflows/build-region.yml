@@ -1,0 +1,62 @@
+name: Build map region
+
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: "Short id, e.g. hungary"
+        required: true
+        default: "hungary"
+      name_hu:
+        description: "Hungarian name"
+        required: true
+        default: "Magyarország"
+      name_en:
+        description: "English name"
+        required: true
+        default: "Hungary"
+      url:
+        description: "Geofabrik .osm.pbf link"
+        required: true
+        default: "https://download.geofabrik.de/europe/hungary-latest.osm.pbf"
+
+permissions:
+  contents: write
+
+jobs:
+  region:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find project (unzip OfflineNav.zip if it was uploaded as zip)
+        run: |
+          if [ -f OfflineNav.zip ]; then
+            unzip -q -o OfflineNav.zip
+            echo "PROJECT=OfflineNav" >> "$GITHUB_ENV"
+          else
+            echo "PROJECT=." >> "$GITHUB_ENV"
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install osmium numpy
+      - name: Download extract
+        run: curl -L --fail -o input.osm.pbf "${{ github.event.inputs.url }}"
+      - name: Get current index (if any)
+        run: |
+          mkdir -p out
+          curl -L -s -o out/index.json "https://github.com/${{ github.repository }}/releases/download/maps/index.json" || true
+          head -c 1 out/index.json | grep -q "{" || rm -f out/index.json
+      - name: Build region
+        run: >
+          python "$PROJECT/tools/build_region.py" input.osm.pbf
+          --id "${{ github.event.inputs.id }}"
+          --name-hu "${{ github.event.inputs.name_hu }}"
+          --name-en "${{ github.event.inputs.name_en }}"
+          --out out --index out/index.json
+      - name: Publish to release "maps"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view maps >/dev/null 2>&1 || gh release create maps --title "Offline maps" --notes "Map data (c) OpenStreetMap contributors, ODbL"
+          gh release upload maps out/${{ github.event.inputs.id }}.nav.gz out/index.json --clobber
